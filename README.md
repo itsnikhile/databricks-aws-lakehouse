@@ -2,7 +2,7 @@
 
 > Production-grade Data Lakehouse architecture using Databricks on AWS with the Medallion Design Pattern (Bronze → Silver → Gold).
 
-![Architecture](docs/architecture_overview.png)
+### Architecture: https://deafening-jade-f5ambnhkij.edgeone.app/
 
 ## 📋 Table of Contents
 - [Overview](#overview)
