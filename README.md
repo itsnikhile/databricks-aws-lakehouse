@@ -1,4 +1,4 @@
-# 🏗️ Databricks + AWS Enterprise Data Lakehouse
+# Databricks + AWS Enterprise Data Lakehouse
 
 > Production-grade Data Lakehouse architecture using Databricks on AWS with the Medallion Design Pattern (Bronze → Silver → Gold).
 
@@ -38,8 +38,8 @@ This repository contains the **complete infrastructure-as-code, pipeline definit
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                  DATA SOURCES & INGESTION                    │
-│  RDS/Aurora · Kinesis · MSK (Kafka) · S3 · SaaS · IoT Core │
+│                  DATA SOURCES & INGESTION                   │
+│  RDS/Aurora · Kinesis · MSK (Kafka) · S3 · SaaS · IoT Core  │
 └───────────────────────┬─────────────────────────────────────┘
                         ▼
 ┌─────────────────────────────────────────────────────────────┐
