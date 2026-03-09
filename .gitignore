@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+*.auto.tfvars
+!terraform.tfvars.example
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Databricks CLI
+.databricks/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+junit.xml
+
+# Secrets — never commit these
+*_credentials.json
+*_secret*
+*.pem
+*.key
+
+# Notebooks (output cells only — keep source)
+*.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary
+tmp/
+temp/
+/tmp/

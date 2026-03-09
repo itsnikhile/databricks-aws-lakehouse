@@ -1,0 +1,222 @@
+# .github/workflows/ci_cd.yml
+# CI/CD pipeline for Databricks + AWS Data Lakehouse
+# Runs on PRs and merges to main
+
+name: Lakehouse CI/CD
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - 'src/**'
+      - 'databricks/**'
+      - 'terraform/**'
+      - 'mlflow/**'
+      - 'tests/**'
+  push:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  TERRAFORM_VERSION: "1.7.5"
+  DATABRICKS_CLI_VERSION: "0.220.0"
+
+jobs:
+  # ── LINT & TYPE CHECK ───────────────────────────────────────────────────────
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install ruff black mypy pytest pytest-cov
+
+      - name: Run ruff linter
+        run: ruff check src/ databricks/ mlflow/ tests/
+
+      - name: Run black formatter check
+        run: black --check src/ databricks/ mlflow/ tests/
+
+  # ── UNIT TESTS ──────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install pyspark==3.5.1 delta-spark==3.1.0
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/unit/ \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+
+  # ── TERRAFORM VALIDATE & PLAN ───────────────────────────────────────────────
+  terraform-validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            us-east-1
+
+      - name: Terraform Init (dev)
+        working-directory: terraform/environments/dev
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        working-directory: terraform/environments/dev
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive terraform/
+
+      - name: Terraform Plan (dev) — PRs only
+        if: github.event_name == 'pull_request'
+        working-directory: terraform/environments/dev
+        env:
+          TF_VAR_databricks_account_id: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+        run: |
+          terraform init
+          terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
+
+      - name: Comment Terraform Plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/environments/dev/plan_output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n...(truncated)' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan (dev)\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+  # ── DATABRICKS BUNDLE VALIDATE ──────────────────────────────────────────────
+  bundle-validate:
+    name: Databricks Bundle Validate
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Validate bundle (dev target)
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_DEV_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_DEV_TOKEN }}
+        run: databricks bundle validate --target dev
+
+  # ── DEPLOY TO DEV (on merge to main) ───────────────────────────────────────
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    needs: [unit-tests, terraform-validate, bundle-validate]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            us-east-1
+
+      - name: Terraform Apply (dev)
+        working-directory: terraform/environments/dev
+        env:
+          TF_VAR_databricks_account_id: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Deploy Asset Bundle to Dev
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_DEV_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_DEV_TOKEN }}
+        run: databricks bundle deploy --target dev
+
+      - name: Run smoke tests
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_DEV_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_DEV_TOKEN }}
+        run: |
+          databricks bundle run ingest_bronze_job --target dev &
+          sleep 120
+          python tests/integration/smoke_test.py
+
+  # ── NOTIFY ──────────────────────────────────────────────────────────────────
+  notify:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [deploy-dev]
+    if: failure()
+
+    steps:
+      - name: Send Slack alert
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":red_circle: *Lakehouse CI/CD Failed*\nBranch: `${{ github.ref }}`\nCommit: `${{ github.sha }}`\nActor: `${{ github.actor }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

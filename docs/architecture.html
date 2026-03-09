@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Databricks + AWS Data Lakehouse Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #0a0e1a; color: #e2e8f0; overflow-x: hidden; }
+
+  .header {
+    background: linear-gradient(135deg, #1a1f35 0%, #0d1117 100%);
+    border-bottom: 2px solid #FF6B35;
+    padding: 28px 48px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .header h1 { font-size: 26px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+  .header h1 span { color: #FF6B35; }
+  .header .badge { background: #FF6B35; color: #fff; padding: 4px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; letter-spacing: 1px; }
+  .subtitle { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+
+  .main { padding: 32px 48px; }
+
+  /* Layer bands */
+  .layer {
+    margin-bottom: 20px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.07);
+    overflow: hidden;
+  }
+  .layer-header {
+    padding: 10px 20px;
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .layer-body { padding: 18px 20px; display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+
+  /* Layer colors */
+  .l-ingestion { background: rgba(59,130,246,0.05); }
+  .l-ingestion .layer-header { background: rgba(59,130,246,0.18); color: #93c5fd; }
+  .l-storage { background: rgba(16,185,129,0.05); }
+  .l-storage .layer-header { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+  .l-compute { background: rgba(255,107,53,0.05); }
+  .l-compute .layer-header { background: rgba(255,107,53,0.15); color: #fdba74; }
+  .l-processing { background: rgba(139,92,246,0.05); }
+  .l-processing .layer-header { background: rgba(139,92,246,0.15); color: #c4b5fd; }
+  .l-governance { background: rgba(245,158,11,0.05); }
+  .l-governance .layer-header { background: rgba(245,158,11,0.15); color: #fcd34d; }
+  .l-serving { background: rgba(236,72,153,0.05); }
+  .l-serving .layer-header { background: rgba(236,72,153,0.15); color: #f9a8d4; }
+  .l-security { background: rgba(100,116,139,0.05); }
+  .l-security .layer-header { background: rgba(100,116,139,0.15); color: #cbd5e1; }
+
+  /* Component cards */
+  .comp {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    padding: 13px 16px;
+    min-width: 150px;
+    flex: 1;
+    transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    cursor: default;
+  }
+  .comp:hover {
+    transform: translateY(-3px);
+    border-color: rgba(255,107,53,0.45);
+    box-shadow: 0 8px 24px rgba(255,107,53,0.15);
+  }
+  .comp .icon { font-size: 22px; margin-bottom: 6px; }
+  .comp .name { font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 3px; }
+  .comp .detail { font-size: 11px; color: #94a3b8; line-height: 1.5; }
+  .comp .tag { display: inline-block; background: rgba(255,107,53,0.15); color: #FF6B35; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 600; margin-top: 6px; }
+  .comp .tag.aws { background: rgba(255,153,0,0.15); color: #ffb347; }
+  .comp .tag.db { background: rgba(255,107,53,0.15); color: #FF6B35; }
+  .comp .tag.oss { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+
+  /* Data flow arrows */
+  .flow-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 0; margin: -8px 0; padding: 0 20px;
+    position: relative; z-index: 10;
+  }
+  .flow-arrow {
+    flex: 1; height: 2px; background: linear-gradient(90deg, transparent, #FF6B35, transparent);
+    position: relative;
+  }
+  .flow-label {
+    background: #0a0e1a; border: 1px solid #FF6B35;
+    color: #FF6B35; font-size: 10px; font-weight: 700;
+    padding: 3px 12px; border-radius: 20px; white-space: nowrap; letter-spacing: 1px;
+  }
+
+  /* Delta Lake zone */
+  .delta-zones {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; width: 100%;
+  }
+  .delta-zone {
+    border-radius: 8px; padding: 12px 14px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .dz-bronze { background: rgba(205,127,50,0.10); border-color: rgba(205,127,50,0.3); }
+  .dz-silver { background: rgba(192,192,192,0.08); border-color: rgba(192,192,192,0.3); }
+  .dz-gold   { background: rgba(255,215,0,0.08);  border-color: rgba(255,215,0,0.3); }
+  .dz-label  { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .dz-bronze .dz-label { color: #cd7f32; }
+  .dz-silver .dz-label { color: #c0c0c0; }
+  .dz-gold   .dz-label { color: #ffd700; }
+  .dz-desc   { font-size: 11px; color: #94a3b8; line-height: 1.5; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    padding: 16px 48px; border-top: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.02);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* Divider arrow between layers */
+  .layer-connector {
+    display: flex; justify-content: center; align-items: center;
+    margin: 4px 0; color: #FF6B35; font-size: 20px; opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>🏗 <span>Databricks</span> + AWS &mdash; Enterprise Data Lakehouse</h1>
+    <div class="subtitle">Reference Architecture · Medallion Design Pattern · Production-Grade</div>
+  </div>
+  <div class="badge">ARCHITECTURE REFERENCE</div>
+</div>
+
+<div class="main">
+
+  <!-- LAYER 1: Data Sources & Ingestion -->
+  <div class="layer l-ingestion">
+    <div class="layer-header">📥 Layer 1 — Data Sources & Ingestion</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">🏭</div>
+        <div class="name">Operational DBs</div>
+        <div class="detail">RDS (PostgreSQL, MySQL), Aurora, DynamoDB CDC via DMS</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📡</div>
+        <div class="name">Streaming Events</div>
+        <div class="detail">Amazon Kinesis Data Streams, MSK (Kafka), EventBridge</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📁</div>
+        <div class="name">Batch Files</div>
+        <div class="detail">S3 Upload, SFTP, AWS Transfer Family, Partner APIs</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">☁️</div>
+        <div class="name">SaaS Sources</div>
+        <div class="detail">Salesforce, Snowflake, SAP via Fivetran / AWS AppFlow</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🌐</div>
+        <div class="name">IoT / Sensors</div>
+        <div class="detail">AWS IoT Core → Kinesis → S3 raw landing zone</div>
+        <span class="tag aws">AWS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 2: Storage - S3 Data Lake -->
+  <div class="layer l-storage">
+    <div class="layer-header">🗄 Layer 2 — AWS S3 Data Lake (Delta Lake Format)</div>
+    <div class="layer-body">
+      <div class="delta-zones">
+        <div class="delta-zone dz-bronze">
+          <div class="dz-label">🥉 Bronze Zone (Raw)</div>
+          <div class="dz-desc">Raw, unprocessed data. Immutable append-only. Partitioned by ingestion date. Parquet + JSON. Schema-on-read.</div>
+        </div>
+        <div class="delta-zone dz-silver">
+          <div class="dz-label">🥈 Silver Zone (Cleaned)</div>
+          <div class="dz-desc">Validated, deduplicated, type-cast data. MERGE operations. PII masked. Delta format with ACID transactions.</div>
+        </div>
+        <div class="delta-zone dz-gold">
+          <div class="dz-label">🥇 Gold Zone (Curated)</div>
+          <div class="dz-desc">Business-level aggregates, star/snowflake schemas, feature stores, ML-ready datasets. Optimized for query.</div>
+        </div>
+      </div>
+      <div style="width:100%; display:flex; gap:14px; margin-top:4px;">
+        <div class="comp">
+          <div class="icon">🔵</div>
+          <div class="name">Delta Lake</div>
+          <div class="detail">ACID, time travel, schema enforcement &amp; evolution, Z-order clustering</div>
+          <span class="tag db">Databricks</span>
+        </div>
+        <div class="comp">
+          <div class="icon">🪣</div>
+          <div class="name">S3 Intelligent-Tiering</div>
+          <div class="detail">Auto-tiering for cost optimization. Lifecycle policies. Cross-region replication for DR.</div>
+          <span class="tag aws">AWS</span>
+        </div>
+        <div class="comp">
+          <div class="icon">🔑</div>
+          <div class="name">S3 Encryption</div>
+          <div class="detail">SSE-KMS with AWS KMS CMK. Bucket policies, VPC endpoints, S3 Access Points</div>
+          <span class="tag aws">AWS</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 3: Databricks Compute -->
+  <div class="layer l-compute">
+    <div class="layer-header">⚡ Layer 3 — Databricks Compute Platform (on AWS EC2)</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">🔄</div>
+        <div class="name">Job Clusters</div>
+        <div class="detail">Auto-scaling EC2 clusters (r5, c5, m5). Spot instances for cost. Cluster policies &amp; pools.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">💻</div>
+        <div class="name">Interactive Clusters</div>
+        <div class="detail">Multi-user shared clusters. Serverless SQL Warehouses. Dev &amp; analyst workspaces.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🌊</div>
+        <div class="name">Structured Streaming</div>
+        <div class="detail">Spark Structured Streaming + Delta Live Tables. Auto Loader for S3 file ingestion.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📊</div>
+        <div class="name">Photon Engine</div>
+        <div class="detail">Vectorized query engine. 2–12x faster than standard Spark for SQL workloads.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔧</div>
+        <div class="name">Instance Profiles</div>
+        <div class="detail">IAM Instance Profiles for S3 access. Cross-account roles, fine-grained credential passthrough.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 4: Data Processing & Engineering -->
+  <div class="layer l-processing">
+    <div class="layer-header">🔬 Layer 4 — Data Processing, Engineering & ML</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">⚙️</div>
+        <div class="name">Delta Live Tables</div>
+        <div class="detail">Declarative ETL pipelines. Expectations for data quality. Auto-scaling &amp; recovery.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🧪</div>
+        <div class="name">MLflow</div>
+        <div class="detail">Experiment tracking, model registry, model serving endpoints. A/B testing &amp; drift detection.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🤖</div>
+        <div class="name">AutoML + Feature Store</div>
+        <div class="detail">Automated ML baseline. Shared feature store with point-in-time lookups.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📋</div>
+        <div class="name">Workflows (Orchestration)</div>
+        <div class="detail">Databricks Workflows DAGs + AWS Step Functions + Apache Airflow (MWAA) integration.</div>
+        <span class="tag db">Databricks</span> <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🧬</div>
+        <div class="name">SageMaker Integration</div>
+        <div class="detail">Train on Databricks, deploy to SageMaker endpoints. Bi-directional data exchange.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 5: Governance -->
+  <div class="layer l-governance">
+    <div class="layer-header">🛡 Layer 5 — Data Governance, Catalog & Quality</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">📚</div>
+        <div class="name">Unity Catalog</div>
+        <div class="detail">Unified metastore for tables, volumes, models, functions. Row &amp; column-level security. Attribute-based access.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🗺️</div>
+        <div class="name">AWS Glue Catalog</div>
+        <div class="detail">Integrated Hive Metastore. Glue crawlers for schema discovery. Cross-service data discoverability.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">✅</div>
+        <div class="name">Data Quality (Great Expectations)</div>
+        <div class="detail">DLT Expectations + Great Expectations OSS. Automated quality checks with alerting.</div>
+        <span class="tag oss">OSS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔍</div>
+        <div class="name">Data Lineage</div>
+        <div class="detail">Unity Catalog auto-lineage tracking. Column-level lineage for compliance &amp; impact analysis.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📜</div>
+        <div class="name">Audit &amp; Compliance</div>
+        <div class="detail">AWS CloudTrail + Databricks audit logs → S3 + Athena. GDPR/HIPAA/SOC2 ready.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 6: Serving -->
+  <div class="layer l-serving">
+    <div class="layer-header">📤 Layer 6 — Data Serving & Consumption</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">📊</div>
+        <div class="name">Databricks SQL</div>
+        <div class="detail">Serverless SQL Warehouses. Dashboards, alerts, scheduled queries for business users.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔴</div>
+        <div class="name">Amazon Redshift</div>
+        <div class="detail">Redshift Spectrum for S3 queries. Data sharing with Redshift clusters. BI-optimized.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔎</div>
+        <div class="name">Amazon Athena</div>
+        <div class="detail">Serverless SQL on S3. Federated queries. No infrastructure management.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📈</div>
+        <div class="name">BI Tools</div>
+        <div class="detail">Tableau, Power BI, Looker via JDBC/ODBC. QuickSight native AWS integration.</div>
+        <span class="tag oss">BI</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🌐</div>
+        <div class="name">REST API / Model Serving</div>
+        <div class="detail">Databricks Model Serving endpoints. API Gateway + Lambda for microservice integration.</div>
+        <span class="tag db">Databricks</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="layer-connector">▼</div>
+
+  <!-- LAYER 7: Security & Networking -->
+  <div class="layer l-security">
+    <div class="layer-header">🔒 Layer 7 — Security, Networking & Observability</div>
+    <div class="layer-body">
+      <div class="comp">
+        <div class="icon">🌐</div>
+        <div class="name">VPC Architecture</div>
+        <div class="detail">Databricks in customer VPC. Private subnets, NAT Gateway, VPC endpoints for S3/KMS.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔐</div>
+        <div class="name">IAM &amp; SSO</div>
+        <div class="detail">AWS IAM roles, AWS SSO / Okta SCIM to Databricks. OIDC, OAuth 2.0 service principals.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🔑</div>
+        <div class="name">Secrets Management</div>
+        <div class="detail">AWS Secrets Manager + Databricks Secret Scopes. Automatic secret rotation.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">📡</div>
+        <div class="name">Monitoring &amp; Alerting</div>
+        <div class="detail">CloudWatch, Databricks system tables, Grafana dashboards. PagerDuty/SNS alerting.</div>
+        <span class="tag aws">AWS</span>
+      </div>
+      <div class="comp">
+        <div class="icon">🏗</div>
+        <div class="name">IaC Deployment</div>
+        <div class="detail">Terraform (Databricks &amp; AWS providers). CI/CD via GitHub Actions, Databricks Asset Bundles.</div>
+        <span class="tag oss">IaC</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#FF6B35;"></div> Databricks Native</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ffb347;"></div> AWS Service</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a5b4fc;"></div> Open Source</div>
+  <div style="margin-left:auto; font-size:11px; color:#475569;">
+    Architecture by Claude · Databricks + AWS Data Lakehouse · Medallion Design Pattern
+  </div>
+</div>
+
+</body>
+</html>

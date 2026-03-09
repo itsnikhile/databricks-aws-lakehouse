@@ -1,0 +1,176 @@
+# databricks.yml — Databricks Asset Bundle configuration
+# Manages notebooks, jobs, DLT pipelines, and secrets across environments
+
+bundle:
+  name: databricks-aws-lakehouse
+
+variables:
+  bronze_bucket:
+    description: "S3 Bronze zone bucket name"
+  silver_bucket:
+    description: "S3 Silver zone bucket name"
+  gold_bucket:
+    description: "S3 Gold zone bucket name"
+  aws_region:
+    description: "AWS region"
+    default: "us-east-1"
+  catalog_prefix:
+    description: "Unity Catalog prefix (e.g. dev_, staging_, prod_)"
+
+# ─── ARTIFACTS ──────────────────────────────────────────────────────────────
+artifacts:
+  lakehouse_wheel:
+    type: whl
+    source: ./src
+    build: pip wheel . --no-deps -w dist/
+
+# ─── RESOURCES ──────────────────────────────────────────────────────────────
+resources:
+
+  # ── DLT PIPELINES ──────────────────────────────────────────────────────────
+  pipelines:
+    bronze_pipeline:
+      name: "[${bundle.target}] Bronze Ingestion Pipeline"
+      development: ${bundle.target == 'dev'}
+      continuous: true
+      channel: "CURRENT"
+      edition: "ADVANCED"
+      photon: true
+      libraries:
+        - file:
+            path: ./databricks/pipelines/bronze_ingestion.py
+      configuration:
+        pipeline.bronze_bucket: "${var.bronze_bucket}"
+        pipeline.kinesis_stream_name: "${var.aws_region}-lakehouse-events"
+        pipeline.aws_region: "${var.aws_region}"
+      clusters:
+        - label: "default"
+          autoscale:
+            min_workers: 2
+            max_workers: 8
+            mode: ENHANCED
+          aws_attributes:
+            availability: SPOT_WITH_FALLBACK
+
+    silver_pipeline:
+      name: "[${bundle.target}] Silver Transformation Pipeline"
+      development: ${bundle.target == 'dev'}
+      continuous: false
+      channel: "CURRENT"
+      edition: "ADVANCED"
+      photon: true
+      libraries:
+        - file:
+            path: ./databricks/pipelines/silver_transformations.py
+      configuration:
+        pipeline.silver_bucket: "${var.silver_bucket}"
+      clusters:
+        - label: "default"
+          autoscale:
+            min_workers: 2
+            max_workers: 10
+            mode: ENHANCED
+          aws_attributes:
+            availability: SPOT_WITH_FALLBACK
+
+    gold_pipeline:
+      name: "[${bundle.target}] Gold Aggregation Pipeline"
+      development: ${bundle.target == 'dev'}
+      continuous: false
+      channel: "CURRENT"
+      edition: "ADVANCED"
+      photon: true
+      libraries:
+        - file:
+            path: ./databricks/pipelines/gold_aggregations.py
+      configuration:
+        pipeline.gold_bucket: "${var.gold_bucket}"
+      clusters:
+        - label: "default"
+          autoscale:
+            min_workers: 1
+            max_workers: 6
+            mode: ENHANCED
+          aws_attributes:
+            availability: SPOT_WITH_FALLBACK
+
+  # ── JOBS ────────────────────────────────────────────────────────────────────
+  jobs:
+    ml_training_job:
+      name: "[${bundle.target}] ML Model Training — Churn Prediction"
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # 2am daily
+        timezone_id: "America/New_York"
+        pause_status: ${bundle.target == 'dev' ? 'PAUSED' : 'UNPAUSED'}
+      tasks:
+        - task_key: train_churn_model
+          spark_python_task:
+            python_file: ./mlflow/train_churn_model.py
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "r5.2xlarge"
+            num_workers: 2
+            aws_attributes:
+              availability: ON_DEMAND
+          libraries:
+            - pypi:
+                package: scikit-learn>=1.3.0
+            - pypi:
+                package: mlflow>=2.11.0
+
+    data_quality_job:
+      name: "[${bundle.target}] Daily Data Quality Report"
+      schedule:
+        quartz_cron_expression: "0 30 6 * * ?"  # 6:30am daily
+        timezone_id: "America/New_York"
+      tasks:
+        - task_key: dq_bronze
+          notebook_task:
+            notebook_path: ./databricks/notebooks/data_quality_report.py
+            base_parameters:
+              catalog: "bronze_catalog"
+              zone: "bronze"
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "m5.xlarge"
+            num_workers: 1
+            aws_attributes:
+              availability: SPOT_WITH_FALLBACK
+
+# ─── TARGETS ────────────────────────────────────────────────────────────────
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.databricks_host}
+    variables:
+      bronze_bucket: "dev-lakehouse-bronze-${var.account_id}"
+      silver_bucket: "dev-lakehouse-silver-${var.account_id}"
+      gold_bucket:   "dev-lakehouse-gold-${var.account_id}"
+      catalog_prefix: "dev_"
+      aws_region: "us-east-1"
+
+  staging:
+    mode: development
+    workspace:
+      host: ${var.databricks_host}
+    variables:
+      bronze_bucket: "staging-lakehouse-bronze-${var.account_id}"
+      silver_bucket: "staging-lakehouse-silver-${var.account_id}"
+      gold_bucket:   "staging-lakehouse-gold-${var.account_id}"
+      catalog_prefix: "staging_"
+      aws_region: "us-east-1"
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.databricks_prod_host}
+    variables:
+      bronze_bucket: "prod-lakehouse-bronze-${var.account_id}"
+      silver_bucket: "prod-lakehouse-silver-${var.account_id}"
+      gold_bucket:   "prod-lakehouse-gold-${var.account_id}"
+      catalog_prefix: ""
+      aws_region: "us-east-1"
+    run_as:
+      service_principal_name: lakehouse-prod-sp
